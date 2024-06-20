@@ -6,7 +6,7 @@
 
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_rp::gpio::{Input, Level, Pull};
+use embassy_rp::gpio::{Input, Level::{self, Low, High}, Output, Pull};
 use embassy_time::{with_deadline, Duration, Instant, Timer};
 use {defmt_rtt as _, panic_probe as _};
 
@@ -39,42 +39,31 @@ impl<'a> Debouncer<'a> {
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
-    let mut btn = Debouncer::new(Input::new(p.PIN_9, Pull::Up), Duration::from_millis(20));
+    let mut btn = Debouncer::new(Input::new(p.PIN_19, Pull::Up), Duration::from_millis(20));
+    let mut led = Output::new(p.PIN_25, Low);
+    let mut prev_level = Low;
+    let mut start = Instant::now();
 
     info!("Debounce Demo");
 
     loop {
-        // button pressed
-        btn.debounce().await;
-        let start = Instant::now();
-        info!("Button Press");
+        // wait for button press
+        let cur_level = btn.debounce().await;
+        match (prev_level, cur_level) {
+            (High, Low) => {
+                start = Instant::now();
+                led.set_level(High);
+                info!("Button Pressed");
+            },
 
-        match with_deadline(start + Duration::from_secs(1), btn.debounce()).await {
-            // Button Released < 1s
-            Ok(_) => {
-                info!("Button pressed for: {}ms", start.elapsed().as_millis());
-                continue;
-            }
-            // button held for > 1s
-            Err(_) => {
-                info!("Button Held");
-            }
+            (Low, High) => {
+                led.set_level(Low);
+                info!("Button released @ {} ms", start.elapsed().as_millis());
+            },
+
+            _ => {} // ignore other cases
         }
-
-        match with_deadline(start + Duration::from_secs(5), btn.debounce()).await {
-            // Button released <5s
-            Ok(_) => {
-                info!("Button pressed for: {}ms", start.elapsed().as_millis());
-                continue;
-            }
-            // button held for > >5s
-            Err(_) => {
-                info!("Button Long Held");
-            }
-        }
-
-        // wait for button release before handling another press
-        btn.debounce().await;
-        info!("Button pressed for: {}ms", start.elapsed().as_millis());
+        prev_level = cur_level;
     }
 }
+
